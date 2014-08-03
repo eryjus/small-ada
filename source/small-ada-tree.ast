@@ -1,0 +1,231 @@
+$defines {
+    #include "StringTables.h"
+
+    #include <string>
+    using namespace std;
+
+    // -- Templates for lists
+    //    -------------------
+    template <class T>
+    inline T *append(T *l, T *r) {
+        T *rv = l;
+        if (!l) return r; if (!r) return l;
+        while(l->Get_next()) l = (T *)l->Get_next();
+        l->Set_next(r);
+        return rv;
+    }
+
+    template <class T>
+    inline T *first(T *l) {
+        return (T*)l;
+    }
+
+    template <class T>
+    inline bool more(T *l) {
+        return (l != 0);
+    }
+
+    template <class T>
+    inline T *next(T *l) {
+        if (more((T *)l)) return (T *)l->Get_next();
+        else return (T *)0;
+    }
+
+    template <class T>
+    inline int len(T *i) {
+        int rv; T *l;
+        for (rv = 0, l = first((T *)i); more((T *)l); l = next((T *)l)) rv ++;
+        return rv;
+    }
+
+    extern int curr_lineno;
+    extern string GlobalNodeFile;
+
+    extern string dig(int i);
+}
+
+
+// ----------------------------------------------------------------------------------------------------------------
+
+// ====================================================
+// == Some low-level declarations used by many types ==
+// ====================================================
+
+// -- Common is a base class from wchich all other classes will be derived
+//    --------------------------------------------------------------------
+$class(Common) $abstract ${
+    $attr $type(int) $name(lineNbr) = $no-init(curr_lineno)         // -- Current Line number
+    $attr $type(string) $name(fileName) = $no-init(GlobalNodeFile)  // -- Current File Name
+
+    $func $spec(string StartLine(void)) = { return fileName + "[" + dig(lineNbr) + "]:"; }
+    $func $spec(void Print(ostream &os, int indent)) = $virtual
+$}
+
+// -- ListOf is a basic list class from which all lists will be derived
+//    -----------------------------------------------------------------
+$class(ListOf) $inherits(Common) $abstract ${
+    $attr $type(ListOf *) $name(next) = $no-init(ListOf::empty())
+
+    $func $spec(void Print(ostream &os, int indent)) = $virtual
+$}
+
+
+// ----------------------------------------------------------------------------------------------------------------
+
+// ===================================================================
+// == This is a name class -- which can be quite complicated in Ada ==
+// ===================================================================
+$class(QualNameList) $inherits(ListOf) ${
+    $attr $type(Identifier *) $name(names)
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+
+// ----------------------------------------------------------------------------------------------------------------
+
+// =================================================================
+// == Ada (at a high-level) is really just a list of declarations ==
+// =================================================================
+$class(Declaration) $inherits(Common) $abstract ${ $}
+$class(DeclarationList) $inherits(ListOf) ${
+    $attr $type(Declaration *) $name(decl)
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+$class(Package) $inherits(Declaration) ${
+    $attr $type(Identifier *) $name(qName)
+    $attr $type(DeclarationList *) $name(decl)
+    $attr $type(DeclarationList *) $name(pvtDecl)
+    $attr $type(Identifier *) $name(endID)
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+$class(WithDeclaration) $inherits(Declaration) ${
+    $attr $type(QualNameList *) $name(list)
+    $attr $type(DeclarationList *) $name(specs) = $no-init(DeclarationList::empty())
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+$class(AdaPgm) $inherits(ListOf) ${
+    $attr $type(DeclarationList *) $name(list)
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+    $func $spec(DeclarationList *GetDeclsAndDestroy(void)) = $external
+$}
+
+// ----------------------------------------------------------------------------------------------------------------
+
+// ====================================================================
+// == Expressions and expression Lists are a staple for any language ==
+// ====================================================================
+$class(Expression) $inherits(Common) $abstract ${ $}
+$class(ExpressionList) $inherits(ListOf) ${
+    $attr $type(Expression *) $name(expr)
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+$class(StrExpr) $inherits(Expression) ${
+    $attr $type(StrLiteral *) $name(str)
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+$class(IdentExpr) $inherits(Expression) ${
+    $attr $type(Identifier *) $name(id)
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+// ----------------------------------------------------------------------------------------------------------------
+
+// =====================================================
+// == Statements and StatementLists are also a staple ==
+// =====================================================
+$class(Statement) $inherits(Common) $abstract ${ $}
+$class(StatementList) $inherits(ListOf) ${
+    $attr $type(Statement *) $name(stmt)
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+// ----------------------------------------------------------------------------------------------------------------
+
+// ==============================================================================
+// == Identifiers are used in several rules and classes...  So declare it here ==
+// ==============================================================================
+$class(Identifier) $inherits(Common) ${
+    $attr $type(Symbol) $name(id)
+
+    $func $spec(void Print(ostream &os, int indent)) = $external
+    $func $spec(string GetIDString(void) const) = { return id->GetKeyValue(); }
+$}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+$class(StrLiteral) $inherits(Identifier) ${
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+
+// ----------------------------------------------------------------------------------------------------------------
+
+// ============================================================================
+// == The following are placeholder classes and are not really ready for use ==
+// ============================================================================
+
+$class(BlockBody) $inherits(Common) ${
+    $attr $type(StatementList *) $name(stmts)
+    $attr $type(ExceptionList *) $name(excepts)
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(CSymbolList) $inherits(Common) ${
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(Label) $inherits(Common) ${
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(FormalParms) $inherits(Common) ${
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(ExceptionList) $inherits(Common) ${
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(PrivateDeclaration) $inherits(Declaration) ${
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(UseDeclaration) $inherits(Declaration) ${
+	$attr $type(ExpressionList *) $name(uses)
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(UseTypeDeclaration) $inherits(Declaration) ${
+	$attr $type(ExpressionList *) $name(uses)
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(ProcedureSpec) $inherits(Declaration) ${
+    $attr $type(Identifier *) $name(name)
+    $attr $type(FormalParms	*) $name(parms)
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(SubprogBody) $inherits(Declaration) ${
+    $attr $type(Declaration *) $name(spec)
+    $attr $type(DeclarationList *) $name(decls)
+    $attr $type(BlockBody *) $name(body)
+    $attr $type(Identifier *) $name(endID)
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(ProcedureCall) $inherits(Statement) ${
+    $attr $type(Expression *) $name(call)
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}
+$class(ArrayOrCall) $inherits(Expression) ${
+    $attr $type(Expression *) $name(name)
+    $attr $type(ExpressionList *) $name(indexOrArgList)
+    $func $spec(void Print(ostream &os, int indent)) = $external
+$}

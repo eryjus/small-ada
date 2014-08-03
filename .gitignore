@@ -1,0 +1,20 @@
+﻿# Code::Blocks project files
+*.depend
+*.layout
+.directory
+
+# other targets from building
+source/small-ada-lex.cc
+source/small-ada-parse.cc
+include/small-ada-parse.h
+include/small-ada-tree.cc
+source/*.output
+
+# binary targets
+obj/*
+bin/*
+tests/*
+std-packages/*
+
+# backup files
+*~

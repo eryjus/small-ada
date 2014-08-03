@@ -1,0 +1,717 @@
+
+%option lang="C++"
+%option track_lines
+%option no_gc_allocator
+
+%both
+%{
+#include "StringTables.h"
+#include "ast-add-on.h"
+#include "SymTable.h"
+
+#include <cstdlib>
+#include <iostream>
+
+extern string GlobalNodeFile;
+extern int curr_lineno;
+extern int semant_error;
+
+class Common;
+
+ostream &P(Common *n);
+extern int iLvl;
+
+#define PRINT(x) 	do { iLvl ++; if (x) Print(x); else { START(x); PRINT_NULL(); LEAVE(); } iLvl --; } while (0)
+#define START(n) 	P(node) << n << " {" << endl
+#define LEAVE()		P(node) << "}" << endl
+#define PRINT_STRING(x) 	do { iLvl ++; P(node) << x << endl; iLvl --; } while (0)
+#define PRINT_NULL() 	do { iLvl ++; P(node) << "(NULL)" << endl; iLvl --; } while (0)
+
+#define SEMANT_ERROR(x)		do { cerr << node->file << "@" << node->lineNbr << ": " << x << endl;  semant_error ++; } while (0)
+
+%}
+
+%enum TypeArrayCall = {ARR_CALL_NC, ARR_CALL_ARRAY, ARR_CALL_CALL}
+
+// ====================================================
+// == The following are all the AST node definitions ==
+// ====================================================
+
+// ======================================================================
+// -- Common abstract class for all nodes
+//    (**** note all classes are based on Common in some way)
+//    -------------------------------------------------------
+%node	Common 									%typedef %abstract	= {
+	%nocreate	int					lineNbr = { curr_lineno };
+	%nocreate	string				file = { GlobalNodeFile };
+}
+
+%node	AdaPgm				Common				%typedef			= {
+				DeclarationList		*list;
+}
+
+// ======================================================================
+// -- The ListOf abstract class handles all AST lists.  All lists will be
+//    derived from this ListOf node.
+//    -------------------------------------------------------------------
+%node	ListOf				Common				%typedef %abstract	= {
+	%nocreate	ListOf				*next = { EMPTY(ListOf); };
+}
+
+// ======================================================================
+// -- Since an Ada program is really a list of Declarations, create an
+//    abstract class from which all other declarations will be derived.
+//    In addition, create a list node for the list of declarations.
+//    -----------------------------------------------------------------
+//    * DeclarationList -- A list of declarations, in any form
+//    -----------------------------------------------------------------
+%node	Declaration			Common				%typedef %abstract
+
+%node	DeclarationList		ListOf				%typedef			= {
+				Declaration			*decl;
+}
+
+// ======================================================================
+// -- Expressions are another key structure in Ada.  Ada supports binary
+//    expressions and unary expressions.  ExpressionList is also here
+//    in order to properly support a list of expressions, such as in
+//    an argument list.
+//    -------------------------------------------------------------------
+%node	Expression			Common				%typedef %abstract
+
+%node	BinaryExpr			Expression			%typedef %abstract	= {
+				Expression			*left;
+				Expression			*right;
+}
+
+%node	UnaryExpr			Expression			%typedef %abstract	= {
+				Expression			*operand;
+}
+
+%node	ExpressionList		ListOf				%typedef			= {
+				Expression			*expr;
+}
+
+// ======================================================================
+// -- Statements are also integral to an Ada program.  There are several
+//    types of statements and all will be derived from the Statement
+//    abstract node.  Also, StatementList is a  list of statements.  A
+//    Block bounds a list of statements and catches exceptions.
+//    -------------------------------------------------------------------
+//    * StatementList -- A list of statements
+//    * BlockBody -- A formal block of statements with optional exception
+//          handling.
+//    -------------------------------------------------------------------
+%node	Statement			Common				%typedef %abstract	= {
+	%nocreate	LabelList			*labels = { EMPTY(LabelList) };
+}
+
+%node	StatementList		ListOf				%typedef			= {
+				Statement			*stmt;
+}
+
+%node	BlockBody			Common				%typedef			= {
+				StatementList		*stmtList;
+				ExceptionList		*excptList;
+}
+
+// ======================================================================
+// -- The following are the declarations for Ada.  Each is derived from
+//    Declaration.
+//    -----------------------------------------------------------------
+//    * PrivateDeclaration -- Exists if the declarations that follow are
+//          private.
+//    * UseDeclaration -- Use a package and shortcut the names within
+//    * UseTypeDeclaration -- Use a package type and shortcut the names
+//    * WithDeclaration -- include a package in the compilation
+//    -------------------------------------------------------------------
+%node	PrivateDeclaration	Declaration			%typedef
+
+%node	UseDeclaration		Declaration			%typedef			= {
+				ExpressionList		*uses;
+}
+
+%node	UseTypeDeclaration	Declaration			%typedef			= {
+				ExpressionList		*uses;
+}
+
+%node	WithDeclaration		Declaration			%typedef			= {
+				CNameList			*with;
+}
+
+%node	ProcedureSpec		Declaration			%typedef			= {
+				CompoundName		*name;
+				FormalParms			*parms;
+}
+
+%node	SubprogBody			Declaration			%typedef			= {
+				Declaration			*spec;
+				DeclarationList		*decls;
+				BlockBody			*body;
+				CompoundName		*endID;
+}
+
+%node	PackageSpec			Declaration			%typedef			= {
+				CompoundName		*name;
+				DeclarationList		*decls;
+				DeclarationList		*pvtDecls;
+				CompoundName		*endID;
+}
+
+// ======================================================================
+// -- A compound name is a common occurrance in Ada.  These structures
+//    keep track of compound names.  They are a SymbolList and
+//    CompoundName.  In addition, create a CNameList.
+//    -------------------------------------------------------------------
+//    * SymbolList -- A list of symbols that create the details of a
+//          compound name.
+//    * CompoundName -- A formal Compound Name
+//    * CNameList -- A list of compound names
+//    -------------------------------------------------------------------
+%node	CSymbolList			ListOf				%typedef			= {
+				Expression			*id;
+}
+
+%node	CompoundName		Common				%typedef			= {
+	%nocreate	string				qName = { string(""); };
+				CSymbolList			*nameList;
+}
+
+%node	CNameList			ListOf				%typedef			= {
+				CompoundName		*list;
+}
+
+// ======================================================================
+// -- The following nodes are used for statement labels
+//    --------------------------------------------------------
+//    * Label -- An individual label
+//    * LabelList -- A list of labels
+//    --------------------------------------------------------
+%node	Label				Common				%typedef			= {
+				Symbol				id;
+}
+
+%node	LabelList			ListOf				%typedef			= {
+				Label				*label;
+}
+
+// ======================================================================
+// -- The following are different types of expressions used in Ada
+//    -------------------------------------------------------------------
+//    * AndExpr -- left AND right
+//    * OrExpr -- left OR right
+//    * XorExpr -- left XOR right
+//    * EQExpr -- left = right
+//    * NEExpr -- left /= right
+//    * LTExpr -- left < right
+//    * LEExpr -- left <= right
+//    * GTExpr -- left > right
+//    * GEExpr -- left >= right
+//    * PlusExpr -- left + right
+//    * MinusExpr -- left - right
+//    * MulExpr -- left * right
+//    * DivExpr -- left / right
+//    * ModExpr -- left MOD right
+//    * RemExpr -- left REM right
+//    * ExpExpr -- left ** right
+//    * UnaryPlus -- + expr
+//    * UnaryMinus -- - expr
+//    * NotExpr -- not expr
+//    * AbsExpr -- abs expr
+//    * NumericLiteral -- Number
+//    * NullLiteral -- Null
+//    * CharLiteral -- Character
+//    * StrLiteral -- String
+//    * Identifier -- Identifier
+//    * ArrayOrCall -- This will be either an array reference or a
+//          function or procedure call.  The determination of this
+//          is postponed to the semantic phase.
+//    ---------------------------------------------------------------
+%node	AndExpr				BinaryExpr			%typedef
+
+%node	OrExpr				BinaryExpr			%typedef
+
+%node	XorExpr				BinaryExpr			%typedef
+
+%node	EQExpr				BinaryExpr			%typedef
+
+%node	NEExpr				BinaryExpr			%typedef
+
+%node	LTExpr				BinaryExpr			%typedef
+
+%node	LEExpr				BinaryExpr			%typedef
+
+%node	GTExpr				BinaryExpr			%typedef
+
+%node	GEExpr				BinaryExpr			%typedef
+
+%node	PlusExpr			BinaryExpr			%typedef
+
+%node	MinusExpr			BinaryExpr			%typedef
+
+%node	MulExpr				BinaryExpr			%typedef
+
+%node	DivExpr				BinaryExpr			%typedef
+
+%node	ModExpr				BinaryExpr			%typedef
+
+%node	RemExpr				BinaryExpr			%typedef
+
+%node	ExpExpr				BinaryExpr			%typedef
+
+%node	UnaryPlus			UnaryExpr			%typedef
+
+%node	UnaryMinus			UnaryExpr			%typedef
+
+%node	NotExpr				UnaryExpr			%typedef
+
+%node	AbsExpr				UnaryExpr			%typedef
+
+%node	NumericLiteral		Expression			%typedef			= {
+				NumberEntry			*nbr;
+}
+
+%node	NullLiteral			Expression			%typedef
+
+%node	CharLiteral			Expression			%typedef			= {
+				int					literal;
+}
+
+%node	StrLiteral			Expression			%typedef			= {
+				StringEntry			*str;
+}
+
+%node	Identifier			Expression			%typedef			= {
+				Symbol				ident;
+}
+
+%node	ArrayOrCall			Expression			%typedef			= {
+	%nocreate	TypeArrayCall 		nodeType = { ARR_CALL_NC };
+				Expression			*name;
+				ExpressionList		*indexOrArgList;
+}
+
+// ======================================================================
+// -- The following Statements are implemented in Ada.
+//    -------------------------------------------------------------------
+//    * ProcedureCall -- call a procedure
+//    -------------------------------------------------------------------
+%node	ProcedureCall		Statement			%typedef			= {
+				Expression			*call;
+}
+
+
+
+
+
+// ======================================================================
+// ======================================================================
+// ======================================================================
+// ======================================================================
+%node	ExceptionList		Common				%typedef
+%node	FormalParms			Common				%typedef
+// ======================================================================
+// ======================================================================
+// ======================================================================
+// ======================================================================
+
+
+
+
+
+// ================================
+// ==== Operations on the Tree ====
+// ================================
+
+%operation void Print(Common *node)
+
+Print(Common) {
+	P(node) << "Unimplemented Print() in node type " << node->getKind() << endl;
+}
+
+Print(AdaPgm) {
+	START("AdaPgm");
+		PRINT(node->list);
+	LEAVE();
+}
+
+Print(DeclarationList) {
+	while(node) {
+		START("DeclarationList Node");
+			PRINT(node->decl);
+		LEAVE();
+
+		node = (DeclarationList *)node->next;
+	}
+}
+
+Print(WithDeclaration) {
+	START("WithDeclaration");
+		PRINT(node->with);
+	LEAVE();
+}
+
+Print(CNameList) {
+	while (node) {
+		START("CNameList Node");
+			PRINT(node->list);
+		LEAVE();
+
+		node = (CNameList *)node->next;
+	}
+}
+
+Print(CompoundName) {
+	START("CompoundName");
+		PRINT(node->nameList);
+	LEAVE();
+
+}
+
+Print(CSymbolList) {
+	START("CSymbolList");
+		PRINT(node->id);
+	LEAVE();
+}
+
+Print(Identifier) {
+	START("Identifier");
+		PRINT_STRING(node->ident->GetKeyValue());
+	LEAVE();
+}
+
+Print(UseDeclaration) {
+	START("UseDeclaration");
+		PRINT(node->uses);
+	LEAVE();
+}
+
+Print(ExpressionList) {
+	while (node) {
+		START("ExpressionList Node");
+			PRINT(node->expr);
+		LEAVE();
+
+		node = (ExpressionList *)node->next;
+	}
+}
+
+Print(SubprogBody) {
+	START("SubprogBody");
+		PRINT(node->spec);
+		PRINT(node->decls);
+		PRINT(node->body);
+		PRINT(node->endID);
+	LEAVE();
+}
+
+Print(ProcedureSpec) {
+	START("ProcedureSpec");
+		PRINT(node->name);
+		PRINT(node->parms);
+	LEAVE();
+}
+
+Print(BlockBody) {
+	START("BlockBody");
+		PRINT(node->stmtList);
+		PRINT(node->excptList);
+	LEAVE();
+}
+
+Print(StatementList) {
+	while (node) {
+		START("StatementList Node");
+			PRINT(node->stmt);
+		LEAVE();
+
+		node = (StatementList *)node->next;
+	}
+}
+
+Print(ProcedureCall) {
+	START("ProcedureCall");
+		PRINT(node->call);
+	LEAVE();
+}
+
+Print(ArrayOrCall) {
+	START("ArrayOrCall");
+		PRINT(node->name);
+		PRINT(node->indexOrArgList);
+	LEAVE();
+}
+
+Print(StrLiteral) {
+	START("StrLiteral");
+		PRINT_STRING(node->str->GetKeyValue());
+	LEAVE();
+}
+
+Print(PackageSpec) {
+	START("PackageSpec");
+		PRINT(node->name);
+		PRINT(node->decls);
+		PRINT(node->pvtDecls);
+		PRINT(node->endID);
+	LEAVE();
+}
+
+
+%operation string Semant([Common *node], Environment *env, string pkg) = { "" }
+
+// --------------------------------------------------------------------------------------------
+
+// -- AdaPgm is the top-level rule in the tree.  It is therefore not in any other rules.
+//    As a result, once this Semantic Check of this node is complete the program is
+//    considered to be a valid program as long as errors were goind at any other node
+//    in the AST.
+//    ----------------------------------------------------------------------------------
+//
+//    1.  We add in the Common package into the parse tree.  This definition will be added
+//        to the start of the tree.
+Semant(AdaPgm) {
+	// -- manually build the parse tree for the Standard Pkg
+	//    --------------------------------------------------
+	PackageSpec *common = new PackageSpec(
+		new CompoundName(
+			new CSymbolList(
+				new Identifier(
+					idTable.AddString("standard")
+				)
+			)
+		),
+		EMPTY(DeclarationList),
+		EMPTY(DeclarationList),
+		new CompoundName(
+			new CSymbolList(
+				new Identifier(
+					idTable.AddString("standard")
+				)
+			)
+		)
+	);
+
+	node->list = append(new DeclarationList(common), node->list);
+
+	// -- Now, semantic check the AST...
+	//    ------------------------------
+	if (node->list) pkg = Semant(node->list, env, pkg);
+
+	return pkg;
+}
+
+// --------------------------------------------------------------------------------------------
+
+// -- DeclarationList is used in many different contexts.  It is therefore not suitable to
+//    perform any real semantic checks within this context.  Therefre, the declaration list
+//    will merely dispatch any lower semantic checks and continue on.  It is important to note
+//    that a declaration does not get cleaned up once a list node is processed.  Therefore
+//    each node is processed recursively so that the Environment is maintained properly, rather
+//    with a while loop.
+//    -----------------------------------------------------------------------------------------
+Semant(DeclarationList) {
+	if (node->decl) pkg = Semant(node->decl, env, pkg);
+	if (node->next)	pkg = Semant(node->next, env, pkg);
+
+	return pkg;
+}
+
+// --------------------------------------------------------------------------------------------
+
+// -- WithDeclaration is used to include other packages into the compilation.  Each package
+//    identified in the List Declaration will be included in the compilation as a separate
+//    file.
+//
+//    There is some debate in my mind over whether to implement this in flex (pushing and
+//    popping the lexer state), bison (trying to interface with flex), or here (adding
+//    pre-built trees into the compilation.  The last option will not work with non-standard
+//    specification files, so it will not be implemented.
+//
+//    I do not believe that this node will ever be used.
+//    -----------------------------------------------------------------------------------------
+Semant(WithDeclaration) {
+	if (node->with) pkg = Semant(node->with, env, pkg);
+
+	CNameList *wrk = node->with;
+	while (wrk) {
+		// TODO: This will be moved to the PackageSpec case
+		cout << "  Including specifications from " << wrk->list->qName << endl;
+		SymEntry *s = env->AddPackageName(idTable.AddString(wrk->list->qName));
+		wrk = (CNameList *)wrk->next;
+	}
+
+	return "";
+}
+
+Semant(CNameList) {
+	if (node->list) pkg = Semant(node->list, env, pkg);
+	if (node->next) pkg = Semant(node->next, env, pkg);
+
+	return "";
+}
+
+Semant(CompoundName) {
+	node->qName = "";
+	for (CSymbolList *i = node->nameList; more(i); i = next(i)) {
+		// -- here we check for a semantic error which should really be caught by the parser...  check anyway
+		//    -----------------------------------------------------------------------------------------------
+		if (i->id->getKind() != Identifier_kind) {
+			SEMANT_ERROR("Identifier expected");
+			return "";
+		}
+
+		Identifier *id = (Identifier *)i->id;
+		if (i != node->nameList) node->qName += ".";
+		node->qName += id->ident->GetKeyValue();
+	}
+
+	return pkg;
+}
+
+Semant(PackageSpec) {
+	// TODO: this is where we really need to add the package in to the symbol table.
+
+	env->EnterScope();
+
+	if (node->name) pkg = Semant(node->name, env, pkg);
+	if (node->decls) pkg = Semant(node->decls, env, pkg);
+	if (node->pvtDecls) pkg = Semant(node->pvtDecls, env, pkg);
+	if (node->endID) pkg = Semant(node->endID, env, pkg);
+
+	if (node->endID) {
+		if (node->name->qName != node->endID->qName) {
+			SEMANT_ERROR("If used, ending ID qualifier must match the name used in the declaration");
+		}
+	}
+
+	env->LeaveScope();
+	return pkg;
+}
+
+Semant(UseDeclaration) {
+	if   (node->uses) {
+		pkg = Semant(node->uses, env, pkg);
+
+		for (ExpressionList *i = first(node->uses); more(i); i = next(i)) {
+			Expression *e = i->expr;
+			if (e->getKind() != Identifier_kind) {
+				SEMANT_ERROR("Expected an Identifier in the USE expression list");
+				continue;
+			}
+
+			Identifier *id = (Identifier *)e;
+			SymEntry *sym = env->Lookup(id->ident);
+			if (!sym) {
+				SEMANT_ERROR("Package " << id->ident->GetKeyValue() << " not imported with a USE clause");
+				continue;
+			}
+
+			if (sym->GetSymbolKind() != TP_PACKAGE) {
+				SEMANT_ERROR(id->ident->GetKeyValue() << " does not refer to a package name");
+			}
+
+			env->AddUse(id->ident);
+		}
+	}
+
+	return "";
+}
+
+Semant(SubprogBody) {
+	env->EnterScope();
+
+	if (node->spec) pkg = Semant(node->spec, env, pkg);
+
+	ProcedureSpec *s = (ProcedureSpec *)node->spec;
+	Symbol id = idTable.AddString(s->name->qName);
+	SymEntry *e = env->AddProcedure(id)->SetSymbolKind(TP_PROCEDURE);
+
+	if (node->decls) pkg = Semant(node->decls, env, pkg);
+	if (node->body) pkg = Semant(node->body, env, pkg);
+	if (node->endID) pkg = Semant(node->endID, env, pkg);
+
+	if (node->endID) {
+		if (node->spec->getKind() != ProcedureSpec_kind) {
+			SEMANT_ERROR("Unable to determine the procedure specification");
+		}
+
+		if (s->name->qName != node->endID->qName) {
+			SEMANT_ERROR("If used, ending ID qualifier (" << node->endID->qName << ")must match the name used in the declaration (" << s->name->qName << ")");
+		}
+	}
+
+	env->LeaveScope();
+	return pkg;
+}
+
+Semant(ProcedureSpec) {
+	if (node->name) pkg = Semant(node->name, env, pkg);
+	if (node->parms) pkg = Semant(node->parms, env, pkg);
+
+	return pkg;
+}
+
+Semant(BlockBody) {
+	if (node->stmtList) pkg = Semant(node->stmtList, env, pkg);
+	if (node->excptList) pkg = Semant(node->excptList, env, pkg);
+
+	return pkg;
+}
+
+Semant(ExpressionList) {
+	if (node->expr) pkg = Semant(node->expr, env, pkg);
+	if (node->next) pkg = Semant(node->next, env, pkg);
+
+	return pkg;
+}
+
+Semant(StatementList) {
+	if (node->stmt) pkg = Semant(node->stmt, env, pkg);
+	if (node->next) pkg = Semant(node->next, env, pkg);
+
+	return pkg;
+}
+
+Semant(ProcedureCall) {
+	if (node->call) pkg = Semant(node->call, env, pkg);
+
+	return pkg;
+}
+
+Semant(ArrayOrCall) {
+	if (node->name) pkg = Semant(node->name, env, pkg);
+	if (node->indexOrArgList) pkg = Semant(node->indexOrArgList, env, pkg);
+
+	return pkg;
+}
+
+Semant(StrLiteral) {
+	return pkg;
+}
+
+Semant(Identifier) {
+	return pkg;
+}
+
+Semant(Common) {
+	SEMANT_ERROR("UNIMPLEMENTED SEMANTIC CHECK: " << (node?node->getKind():0));
+
+	return pkg;
+}
+
+%%
+
+int iLvl = 0;
+
+ostream &I(ostream &o)
+{
+	for (int i = 0; i < iLvl; i ++) o << " ";
+	return o;
+}
+
+ostream &P(Common *n)
+{
+	cout << n->file << "@" << n->lineNbr << ": " << I;
+	return cout;
+}
